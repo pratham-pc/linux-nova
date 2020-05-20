@@ -27,6 +27,7 @@
 #include <linux/bitops.h>
 #include "nova.h"
 #include "inode.h"
+#include <linux/random.h>
 
 int nova_alloc_block_free_lists(struct super_block *sb)
 {
@@ -714,15 +715,18 @@ next:
 static long nova_alloc_blocks_in_free_list(struct super_block *sb,
 	struct free_list *free_list, unsigned short btype,
 	enum alloc_type atype, unsigned long num_blocks,
-	unsigned long *new_blocknr, enum nova_alloc_direction from_tail)
+	unsigned long *new_blocknr, enum nova_alloc_direction from_tail,
+	int rnd)
 {
-	struct rb_root *tree;
+		struct rb_root *tree;
 	struct nova_range_node *curr, *next = NULL, *prev = NULL;
 	struct rb_node *temp, *next_node, *prev_node;
 	unsigned long curr_blocks;
 	bool found = 0;
 	bool found_hugeblock = 0;
 	unsigned long step = 0;
+	unsigned int strt = 0;
+	int cnt = 0;
 
 	if (!free_list->first_node || free_list->num_free_blocks == 0) {
 		nova_dbgv("%s: Can't alloc. free_list->first_node=0x%p "
@@ -739,10 +743,23 @@ static long nova_alloc_blocks_in_free_list(struct super_block *sb,
 	}
 
 	tree = &(free_list->block_free_tree);
-	if (from_tail == ALLOC_FROM_HEAD)
+	if (rnd) {
+		get_random_bytes(&strt, sizeof(strt));
+		strt %= free_list->num_blocknode;
+	}
+	if (from_tail == ALLOC_FROM_HEAD) {
+		int i;
 		temp = &(free_list->first_node->node);
-	else
+		for (i = 0; i < strt; i++) {
+			temp = rb_next(temp);
+		}
+	} else {
+		int i;
 		temp = &(free_list->last_node->node);
+		for (i = 0; i < strt; i++) {
+			temp = rb_prev(temp);
+		}
+	}
 
 	/* Try huge block allocation for data blocks first */
 	if (IS_DATABLOCKS_2MB_ALIGNED(num_blocks, atype)) {
@@ -753,7 +770,7 @@ static long nova_alloc_blocks_in_free_list(struct super_block *sb,
 	}
 
 	/* fallback to un-aglined allocation then */
-	while (temp) {
+	while (temp && cnt <= free_list->num_blocknode) {
 		step++;
 		curr = container_of(temp, struct nova_range_node, node);
 
@@ -808,26 +825,23 @@ static long nova_alloc_blocks_in_free_list(struct super_block *sb,
 		found = 1;
 		break;
 next:
-		if (from_tail == ALLOC_FROM_HEAD)
+		if (from_tail == ALLOC_FROM_HEAD) {
 			temp = rb_next(temp);
-		else
+			if (!temp)
+				temp = &(free_list->first_node->node);
+		} else {
 			temp = rb_prev(temp);
+			if (!temp)
+				temp = &(free_list->last_node->node);
+		}
+		cnt++;
 	}
-
-	if (free_list->num_free_blocks < num_blocks) {
-		nova_dbg("%s: free list %d has %lu free blocks, "
-			 "but allocated %lu blocks?\n",
-			 __func__, free_list->index,
-			 free_list->num_free_blocks, num_blocks);
-		return -ENOSPC;
-	}
-
 success:
 	if ((found == 1) || (found_hugeblock == 1))
-		free_list->num_free_blocks -= num_blocks;
+			free_list->num_free_blocks -= num_blocks;
 	else {
-		nova_dbgv("%s: Can't alloc.  found = %d", __func__, found);
-		return -ENOSPC;
+			nova_dbgv("%s: Can't alloc.  found = %d", __func__, found);
+			return -ENOSPC;
 	}
 
 	NOVA_STATS_ADD(alloc_steps, step);
@@ -857,7 +871,8 @@ static int nova_get_candidate_free_list(struct super_block *sb)
 
 static int nova_new_blocks(struct super_block *sb, unsigned long *blocknr,
 	unsigned int num, unsigned short btype, int zero,
-	enum alloc_type atype, int cpuid, enum nova_alloc_direction from_tail)
+	enum alloc_type atype, int cpuid, enum nova_alloc_direction from_tail,
+	int rnd)
 {
 	struct free_list *free_list;
 	void *bp;
@@ -898,7 +913,7 @@ retry:
 	}
 alloc:
 	ret_blocks = nova_alloc_blocks_in_free_list(sb, free_list, btype, atype,
-					num_blocks, &new_blocknr, from_tail);
+					num_blocks, &new_blocknr, from_tail, rnd);
 
 	if (ret_blocks > 0) {
 		if (atype == LOG) {
@@ -946,7 +961,7 @@ int nova_new_data_blocks(struct super_block *sb,
 
 	NOVA_START_TIMING(new_data_blocks_t, alloc_time);
 	allocated = nova_new_blocks(sb, blocknr, num,
-			    sih->i_blk_type, zero, DATA, cpu, from_tail);
+			    sih->i_blk_type, zero, DATA, cpu, from_tail, 1);
 	NOVA_END_TIMING(new_data_blocks_t, alloc_time);
 	if (allocated < 0) {
 		nova_dbgv("FAILED: Inode %lu, start blk %lu, "
@@ -976,7 +991,7 @@ int nova_new_log_blocks(struct super_block *sb,
 
 	NOVA_START_TIMING(new_log_blocks_t, alloc_time);
 	allocated = nova_new_blocks(sb, blocknr, num,
-			    sih->i_blk_type, zero, LOG, cpu, from_tail);
+			    sih->i_blk_type, zero, LOG, cpu, from_tail, 0);
 	NOVA_END_TIMING(new_log_blocks_t, alloc_time);
 	if (allocated < 0) {
 		nova_dbgv("%s: ino %lu, failed to alloc %d log blocks",
