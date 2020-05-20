@@ -25,6 +25,7 @@
 #include "nova.h"
 #include "inode.h"
 
+static long long unsigned int cntt = 0;
 static inline void wprotect_disable(void)
 {
 	unsigned long cr0_val;
@@ -54,6 +55,7 @@ int nova_writeable(void *vaddr, unsigned long size, int rw)
 
 	NOVA_START_TIMING(wprotect_t, wprotect_time);
 	if (rw) {
+		nova_dbg("ADDR: %llu,\t SIZE: %lu,\t COUNT: %llu", virt_to_phys(vaddr), size, ++cntt);
 		local_irq_save(flags);
 		wprotect_disable();
 	} else {
