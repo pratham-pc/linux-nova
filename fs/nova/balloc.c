@@ -725,7 +725,7 @@ static long nova_alloc_blocks_in_free_list(struct super_block *sb,
 	bool found = 0;
 	bool found_hugeblock = 0;
 	unsigned long step = 0;
-	unsigned int strt = 0;
+	unsigned int strt = 0, strt2 = 0;
 	int cnt = 0;
 
 	if (!free_list->first_node || free_list->num_free_blocks == 0) {
@@ -746,7 +746,10 @@ static long nova_alloc_blocks_in_free_list(struct super_block *sb,
 	if (rnd) {
 		get_random_bytes(&strt, sizeof(strt));
 		strt %= free_list->num_blocknode;
+		get_random_bytes(&strt2, sizeof(strt));
+		from_tail = strt2 % 2;
 	}
+
 	if (from_tail == ALLOC_FROM_HEAD) {
 		int i;
 		temp = &(free_list->first_node->node);
