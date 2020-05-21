@@ -54,6 +54,7 @@ int nova_writeable(void *vaddr, unsigned long size, int rw)
 
 	NOVA_START_TIMING(wprotect_t, wprotect_time);
 	if (rw) {
+		nova_dbg("%llu %lu", virt_to_phys(vaddr), size);
 		local_irq_save(flags);
 		wprotect_disable();
 	} else {
